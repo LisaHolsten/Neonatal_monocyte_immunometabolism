@@ -1,0 +1,62 @@
+---
+title: "Table S3"
+author: "Lisa Holsten"
+date: '2023-09-04'
+output: html_document
+---
+
+
+# Packages
+
+```{r}
+install.packages("openxlsx")
+library(openxlsx)
+```
+
+
+# Prepare df for sheet 2
+
+```{r}
+tmp <- hcobject$integrated_output$enrichments$top_GO$enrichment
+GO <- data.frame()
+for (i in names(tmp)) {
+  print(i)
+  x <- tmp[[i]]
+  x$module <- i
+  GO <- rbind(GO, x)
+}
+GO$reference <- "GO"
+
+tmp <- hcobject$integrated_output$enrichments$top_KEGG$enrichment
+KEGG <- data.frame()
+for (i in names(tmp)) {
+  print(i)
+  x <- tmp[[i]]
+  x$module <- i
+  KEGG <- rbind(KEGG, x)
+}
+KEGG$reference <- "KEGG"
+
+tmp <- hcobject$integrated_output$enrichments$top_HALL$enrichment
+HM <- data.frame()
+for (i in names(tmp)) {
+  print(i)
+  x <- tmp[[i]]
+  x$module <- i
+  HM <- rbind(HM, x)
+}
+HM$reference <- "HM"
+
+
+functional_enrichment_results <- rbind(GO, KEGG, HM)
+```
+
+
+# Save table S3
+
+```{r}
+list_of_datasets <- list("DESeq2 - DEA results" = DE_results.df, 
+                         "hCoCena - Functional enrichment" = functional_enrichment_results,
+                         "hCoCena - TFBS enrichemnt" = motifEnrichmentTable)
+write.xlsx(list_of_datasets, file = "tables/Table_S3.xlsx")
+```

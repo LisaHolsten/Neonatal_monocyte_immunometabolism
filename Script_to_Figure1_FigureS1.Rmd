@@ -1,0 +1,714 @@
+---
+title: "Figure 1 & Figure S1"
+author: "Lisa Holsten"
+date: '2023-09-04'
+output: html_document
+---
+
+
+## Packages
+
+```{r}
+library(DESeq2)
+library(sva)
+library(limma)
+library(ggplot2)
+library(ggrepel)
+library(tidyverse)
+library(UpSetR)
+library(dplyr)
+library(tidyr)
+```
+
+
+## Functions
+
+```{r}
+limmaBatchEffectRemoval <- function(input=dds_vst,
+                                    batchfactor, # name of batch effect column in sample_table
+                                    batchfactor_2=NULL,
+                                    modelfactor){ # name of model effect column in sample_table
+  # rlog-transformed input
+  x <- as.matrix(assay(input))
+  # design matrix
+  model <- model.matrix(~sample_table[,c(modelfactor)])
+  # run batch remocal function
+  if(is.numeric(sample_table[,colnames(sample_table) == batchfactor[1]])==T){
+    as.data.frame(removeBatchEffect(x,
+                                    covariates = sample_table[,colnames(sample_table) %in% batchfactor],
+                                    design = model))
+  }else{
+    if(is.null(batchfactor_2)){
+      as.data.frame(removeBatchEffect(x=x,
+                                      batch = sample_table[,colnames(sample_table) == batchfactor],
+                                      design = model))
+    }else{
+      as.data.frame(removeBatchEffect(x=x,
+                                      batch = sample_table[,colnames(sample_table) == batchfactor],
+                                      batch2 = sample_table[,colnames(sample_table) == batchfactor_2],
+                                      design = model))
+    }
+  }
+}
+
+plotPCA <- function(pca_input = dds_vst,
+                    pca_sample_table = sample_table,
+                    ntop=500,
+                    xPC=1,
+                    yPC=2,
+                    color,
+                    anno_colour,
+                    shape="NULL",
+                    point_size=3,
+                    title="PCA",
+                    label = NULL,
+                    label_subset = NULL){
+  
+  if(!is.data.frame(pca_input)){
+    vst_matrix <-as.matrix(assay(pca_input))
+  }else{
+    vst_matrix <- pca_input
+  }
+  
+  if(ntop=="all"){
+    pca <- prcomp(t(vst_matrix))
+  }else{
+    # select the ntop genes by variance
+    select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
+    pca <- prcomp(t(vst_matrix[select,]))
+  }
+  
+  #calculate explained variance per PC
+  explVar <- pca$sdev^2/sum(pca$sdev^2)
+  # transform variance to percent
+  percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
+  
+  # Define data for plotting
+  pcaData <- data.frame(xPC=pca$x[,xPC],
+                        yPC=pca$x[,yPC],
+                        color = pca_sample_table[[color]],
+                        name= as.character(pca_sample_table$ID),
+                        stringsAsFactors = F)
+  
+  #plot PCA
+  if(is.factor(pcaData$color) || is.character(pcaData$color)|| is.integer(pcaData$color)){
+    if(shape == "NULL"){
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color)) +
+        geom_point(size =point_size)
+    }else{
+      pcaData$shape = pca_sample_table[[shape]]
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color, shape=shape)) +
+        geom_point(size =point_size) +
+        scale_shape_discrete(name=shape)
+    }
+    
+    if(anno_colour[1] == "NULL"){
+      pca_plot <- pca_plot + scale_color_discrete(name=color)
+    }else{
+      pca_plot <- pca_plot + scale_color_manual(values=anno_colour, name=color)
+    }
+    
+  }else if(is.numeric(pcaData$color)){
+    if(shape == "NULL"){
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color)) +
+        geom_point(size =point_size) +
+        scale_color_gradientn(colours = bluered(100),name=color)
+    }else{
+      pcaData$shape = pca_sample_table[[shape]]
+      pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color, shape=shape)) +
+        geom_point(size =point_size) +
+        scale_color_gradientn(colours = bluered(100),name=color)+
+        scale_shape_discrete(name=shape)
+    }
+  }
+  
+  # adds a label to the plot. To label only specific points, put them in the arument label_subset
+  if (!is.null(label) == TRUE){
+    pcaData$label <- pca_sample_table[[label]]
+    if(!is.null(label_subset) == TRUE){
+      pcaData_labeled <- pcaData[pcaData$label %in% label_subset,]
+    } else {
+      pcaData_labeled <- pcaData
+    }
+    pca_plot <- pca_plot +
+      geom_text_repel(data = pcaData_labeled, aes(label = label), nudge_x = 2, nudge_y = 2, colour = "black")
+  }
+  
+  pca_plot <- pca_plot+
+    xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+    ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
+    coord_fixed()+
+    theme_classic()+
+    theme(aspect.ratio = 1)+
+    ggtitle(title)
+  
+  pca_plot
+}
+
+
+DEAnalysis <- function(input=dds,
+                       condition,
+                       comparison_table = comparison_table,
+                       alpha = 0.05,
+                       lfcThreshold = 0,
+                       sigFC = 2,
+                       multiple_testing = "IHW",
+                       independentFiltering= TRUE,
+                       shrinkage = TRUE,
+                       shrinkType = "normal"){
+  
+  setClass(Class = "DESeq2_analysis_object",
+           slots = c(results="data.frame", DE_genes="list", Number_DE_genes="list"))
+  
+  # create results_list
+  results_list <- list()
+  # print parameters
+  results_list$parameters <-list(multiple_testing = multiple_testing,
+                                 p_value_threshold = alpha,
+                                 log2_FC_threshold = lfcThreshold,
+                                 shrinkage = shrinkage,
+                                 shrinkage_type = shrinkType)
+  # Run results() function on comparisons defined in comparison table
+  for (i in 1:nrow(comparison_table)){
+    # create DE_object
+    DE_object <- new(Class = "DESeq2_analysis_object")
+    # IHW
+    if (multiple_testing=="IHW") {
+      res_deseq_lfc <- results(input,
+                               contrast = c(condition,
+                                            paste(comparison_table$comparison[i]),
+                                            paste(comparison_table$control[i])),
+                               lfcThreshold = lfcThreshold,
+                               alpha = alpha,
+                               filterFun = IHW::ihw,
+                               altHypothesis = "greaterAbs")
+      # Independent Filtering
+    }else {
+      res_deseq_lfc <- results(input,
+                               contrast = c(condition,
+                                            paste(comparison_table$comparison[i]),
+                                            paste(comparison_table$control[i])),
+                               lfcThreshold = lfcThreshold,
+                               alpha = alpha,
+                               independentFiltering = independentFiltering,
+                               altHypothesis = "greaterAbs",
+                               pAdjustMethod= multiple_testing)
+    }
+    if(shrinkage == TRUE){
+      if(shrinkType %in% c("normal", "ashr")){
+        res_deseq_lfc <- lfcShrink(input, 
+                                   contrast = c(condition,
+                                                paste(comparison_table$comparison[i]),
+                                                paste(comparison_table$control[i])),
+                                   res=res_deseq_lfc,
+                                   type = shrinkType)
+        
+      }else if(shrinkType == "apeglm"){
+        res_deseq_lfc <- lfcShrink(input, 
+                                   coef = paste0(condition, "_",
+                                                 comparison_table$comparison[i], "_vs_",
+                                                 comparison_table$control[i]),
+                                   res=res_deseq_lfc,
+                                   type = shrinkType,
+                                   returnList = F)
+      }
+    }
+    res_deseq_lfc <- as.data.frame(res_deseq_lfc)
+    # indicate significant DE genes
+    res_deseq_lfc$regulation <- ifelse(!is.na(res_deseq_lfc$padj) & res_deseq_lfc$padj < alpha &
+                                         res_deseq_lfc$log2FoldChange > log(sigFC,2), "up",
+                                       ifelse(!is.na(res_deseq_lfc$padj) & res_deseq_lfc$padj < alpha &
+                                                res_deseq_lfc$log2FoldChange < -log(sigFC,2), "down",
+                                              "n.s."))
+    # add gene annotation to results table
+    res_deseq_lfc$GENEID <- row.names(res_deseq_lfc)
+    res_deseq_lfc <- merge(res_deseq_lfc, tx_annotation, by = "GENEID")
+    row.names(res_deseq_lfc) <- res_deseq_lfc$GENEID
+    res_deseq_lfc$comparison <- paste(comparison_table$comparison[i]," vs ",comparison_table$control[i], sep="")
+    
+    # print result table
+    DE_object@results <- res_deseq_lfc
+    # print DE genes in separate tables
+    DE_object@DE_genes <- list(up_regulated_Genes = res_deseq_lfc[res_deseq_lfc$regulation =="up",],
+                               down_regulated_Genes= res_deseq_lfc[res_deseq_lfc$regulation =="down",])
+    # print the numbers of DE genes
+    DE_object@Number_DE_genes <- list(up_regulated_Genes = nrow(DE_object@DE_genes$up_regulated_Genes),
+                                      down_regulated_Genes= nrow(DE_object@DE_genes$down_regulated_Genes))
+    # write DE_object into results_list
+    results_list[[paste(comparison_table$comparison[i], "vs", comparison_table$control[i], sep="_")]] <- DE_object
+  }
+  return(results_list)
+}
+```
+
+
+## Color scheme
+
+```{r}
+col_group <- c("#FC6B9D", "#323232")
+names(col_group) <- c("NEO", "AD")
+
+ann_colors <- list(group = col_group)
+```
+
+
+## Data import
+Sample table
+```{r}
+sample_table <- read.table(file = "tables/sample_table.txt", 
+                           sep = ";", 
+                           stringsAsFactors = F)
+sample_table$condition <- factor(sample_table$condition, levels = c("NEO_ctl", "AD_ctl", "NEO_LPS", "AD_LPS"))
+```
+
+Reference files
+```{r}
+secretome <- read.delim(file = "references/Human_Protein_atlas_protein_class_predicted_secretome.tsv")
+```
+
+Gene annotation
+```{r}
+tx_annotation <- read.delim(file = "references/ID2SYMBOL_gencode_v33.txt",
+                            header = F , 
+                            stringsAsFactors = F,
+                            col.names = c("GENEID", "SYMBOL", "GENETYPE"))
+```
+
+
+Count matrix
+```{r}
+star.count <- read.table(file = "~/data/alignment/2021-12-06/output/all_samples.tsv", row.names = 1, header = T, stringsAsFactors = F )
+star.count <- star.count[, colnames(star.count) %in% sample_table$ID]
+```
+
+
+# ----
+
+
+## DESeq2 analysis
+
+### 1. Generate DESeq object
+```{r}
+identical(rownames(sample_table), colnames(star.count))
+dds_txi <- DESeqDataSetFromMatrix(countData = star.count,  
+                                  colData   = sample_table, 
+                                  design    = ~condition)
+```
+
+### 2. Pre-filtering & annotation
+```{r}
+genes_to_keep <- rowSums(counts(dds_txi) >= 10) >= 3
+dds <- dds_txi[genes_to_keep,]
+```
+
+
+### 3. DESeq calculations
+```{r}
+dds <- DESeq(dds)
+```
+
+### 4. Filtering
+Remove genes with same symbol:
+```{r}
+dds <- dds[!rownames(dds) %in% c("ENSG00000063438.17", "ENSG00000284024.2"), ] 
+```
+
+Remove mito genes:
+```{r}
+genes_to_keep <- tx_annotation[grep("MT-RNR2|MT-RNR1", tx_annotation$SYMBOL, ignore.case = T, invert = T), ]$GENEID
+dds <- dds[rownames(dds) %in% genes_to_keep, ]
+```
+
+```{r}
+dds <- DESeq(dds)
+```
+
+
+### 5. Variance-stabilized transformation
+```{r}
+dds_vst <- rlog(dds, blind = FALSE)
+```
+
+
+### 6. Batch correction
+```{r}
+# Format and filter the input
+dat <- counts(dds, normalized=TRUE)
+idx <- rowMeans(dat) > 1
+dat <- dat[idx,]
+
+# Create the full model matrix - including both the adjustment variables and the variable of interest.
+mod  <- model.matrix(~condition, colData(dds))
+
+# The null model contains only the adjustment variables. Since we are not adjusting for any other variables in this analysis, only an intercept is included in the model.
+mod0 <- model.matrix(~1, colData(dds))
+
+# estimate the surrogate variables
+svseq <- svaseq(dat, mod, mod0)
+svseq$sv
+
+# Add surrogate variables to annotation table to re-analyse the data including the surrogate variables in the analysis
+for (i in 1:ncol(svseq$sv)) {
+  sample_table[[paste0("SV",i)]] <- svseq$sv[,i]
+}
+
+dds$SV1 <- svseq$sv[,1]
+dds$SV2 <- svseq$sv[,2]
+dds$SV3 <- svseq$sv[,3]
+design(dds) <- ~ SV1 + SV2 + SV3 + condition
+
+dds <- DESeq(dds)
+```
+
+#### PCA of batch-corrected counts (Fig. 1A)
+```{r, fig.width=4, fig.height=4}
+removedbatch_dds_vst <- limmaBatchEffectRemoval(input = dds_vst,
+                                                modelfactor = "condition",
+                                                batchfactor = c("SV1","SV2","SV3"),
+                                                batchfactor_2 = NULL)
+
+plotPCA(pca_input = removedbatch_dds_vst,
+        ntop="all",
+        xPC=1, yPC=2,
+        color="group",
+        anno_colour = col_group, 
+        shape = "treatment",
+        point_size=3,
+        title="PCA of batch-corrected counts")
+
+ggsave(filename = "plots/Fig_1B_PCA.pdf", device = cairo_pdf, dpi = "print", height = 4, width = 4)
+```
+
+
+### 7. Differential expression analysis (DEA)
+
+Relevant comparisons
+```{r}
+comparison_table <- data.frame(comparison = c("NEO_ctl","NEO_LPS", "NEO_LPS", "AD_LPS"),
+                               control = c("AD_ctl","AD_LPS","NEO_ctl", "AD_ctl"))
+```
+
+DEA
+```{r}
+dds_dea <- dds
+DEresults_list <- list()
+  
+for (i in 1:length(comparison_table$control)) {
+  dds_dea$condition <- relevel(dds_dea$condition, as.character(comparison_table$control[i]))
+  dds_dea <- nbinomWaldTest(object = dds_dea)
+  comparison_table_subset  <-  comparison_table[i, ]
+  
+  DEresults <- DEAnalysis(input = dds_dea,
+                          comparison_table = comparison_table_subset,
+                          condition = "condition",
+                          alpha = 0.05,
+                          lfcThreshold = 0,
+                          sigFC = 2,
+                          multiple_testing = "IHW",
+                          shrinkage = TRUE,
+                          shrinkType = "apeglm")
+  DEresults_list <- c(DEresults_list, DEresults)
+}
+
+DEresults <- DEresults_list[unique(names(DEresults_list))]
+DE_results.df <- rbind(DEresults$NEO_ctl_vs_AD_ctl@results, 
+                       DEresults$NEO_LPS_vs_AD_LPS@results,
+                       DEresults$NEO_LPS_vs_NEO_ctl@results,
+                       DEresults$AD_LPS_vs_AD_ctl@results)
+
+write.table(DE_results.df, "tables/DEGs.csv", quote = F, sep = "\t", dec = ",")
+```
+
+
+#### Number of DEGs
+```{r, fig.height=6.5, fig.width=6}
+tmp <- DE_results.df %>% filter(regulation != "n.s.") %>% group_by(comparison, regulation) %>%
+  dplyr::summarize("Freq" = n())
+
+tmp$comparison <- factor(tmp$comparison, levels = c("NEO_ctl vs AD_ctl",
+                                                    "NEO_LPS vs NEO_ctl",
+                                                    "AD_LPS vs AD_ctl",
+                                                    "NEO_LPS vs AD_LPS"))
+
+ggplot(data = tmp, aes(x = comparison, y = Freq, fill = regulation)) + 
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_text(aes(label=Freq), vjust = -0.5, position = position_dodge(0.9)) +
+  scale_fill_manual(values = c("dodgerblue3", "firebrick4")) +
+  theme_bw() + 
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  xlab("") + ylab("Number of DEGs")
+
+ggsave(filename = "plots/Fig_S1A_Barplot_nDEGs.pdf", device = cairo_pdf, dpi = "print", height = 6, width = 6)
+```
+
+
+#### FC-FC plot
+
+```{r, fig.width=7, fig.height=7}
+FC.all <- DE_results.df[DE_results.df$comparison %in% c("NEO_LPS vs NEO_ctl", "AD_LPS vs AD_ctl"), ]
+FC.all$comparison <- ifelse(FC.all$comparison == "NEO_LPS vs NEO_ctl", "NEO_LPS_vs_NEO_ctl", "AD_LPS_vs_AD_ctl")
+
+DEgenes <- DE_results.df[DE_results.df$comparison %in% c("NEO_LPS vs NEO_ctl", "AD_LPS vs AD_ctl") & DE_results.df$regulation != "n.s.", ]
+DEgenes$comparison <- ifelse(DEgenes$comparison == "NEO_LPS vs NEO_ctl", "NEO_LPS_vs_NEO_ctl", "AD_LPS_vs_AD_ctl")
+
+# FC matrix
+tmp <- FC.all[FC.all$comparison %in% c("NEO_LPS_vs_NEO_ctl", "AD_LPS_vs_AD_ctl"), ]
+m.FC <- tmp[ , c("SYMBOL","comparison","log2FoldChange")] %>% pivot_wider(names_from = comparison, values_from = log2FoldChange)
+m.FC[is.na(m.FC)] <- 0
+m.FC <- m.FC[, c("SYMBOL", "NEO_LPS_vs_NEO_ctl", "AD_LPS_vs_AD_ctl")]
+
+# regulation matrix
+DEgenes_oi <- DEgenes[DEgenes$comparison %in% c("NEO_LPS_vs_NEO_ctl","AD_LPS_vs_AD_ctl"), ]
+DEgenes_oi[ , c("SYMBOL", "comparison", "regulation")] %>% pivot_wider(names_from = comparison, values_from = regulation) -> m.reg
+
+m.reg <- m.reg[, c("SYMBOL", "NEO_LPS_vs_NEO_ctl", "AD_LPS_vs_AD_ctl")]
+m.reg[is.na(m.reg)] <- "no"
+m.reg$category <- paste(m.reg$NEO_LPS_vs_NEO_ctl, m.reg$AD_LPS_vs_AD_ctl, sep = "_")
+m.reg$summary <- ifelse(m.reg$category == "down_down", "shared.down",
+                 ifelse(m.reg$category == "no_down", "comp2.down",
+                 ifelse(m.reg$category =="down_no", "comp1.down",
+                 ifelse(m.reg$category == "up_up", "shared.up",
+                 ifelse(m.reg$category == "no_up", "comp2.up",
+                 ifelse(m.reg$category == "up_no", "comp1.up",
+                 ifelse(m.reg$category == "up_down", "comp1.up_comp2.down",
+                 ifelse(m.reg$category == "down_up", "comp1.down_comp2.up",
+                        "other"))))))))
+
+# merge FC and regulation information
+idx <- match(m.FC$SYMBOL, m.reg$SYMBOL)
+m.FC$summary <- m.reg$summary[idx]
+m.FC[is.na(m.FC$summary),]$summary <- "notDE"
+rownames(m.FC) <- m.FC$SYMBOL
+
+# label genes
+tmp <- m.FC[m.FC$SYMBOL %in% secretome$Gene, ]
+a <- tmp %>% subset(summary %in% c("shared.up"))   %>% group_by(summary) %>% slice_max(order_by = NEO_LPS_vs_NEO_ctl, n = 10, with_ties = T) %>% pull(SYMBOL)
+b <- tmp %>% subset(summary %in% c("shared.down")) %>% group_by(summary) %>% slice_min(order_by = NEO_LPS_vs_NEO_ctl, n = 10, with_ties = T) %>% pull(SYMBOL)
+c <- tmp %>% subset(summary %in% c("shared.up"))   %>% group_by(summary) %>% slice_max(order_by = AD_LPS_vs_AD_ctl,   n = 10, with_ties = T) %>% pull(SYMBOL)
+d <- tmp %>% subset(summary %in% c("shared.down")) %>% group_by(summary) %>% slice_min(order_by = AD_LPS_vs_AD_ctl,   n = 10, with_ties = T) %>% pull(SYMBOL)
+genes.to.label <- unique(c(a, b, c, d))
+
+
+# plot
+ggplot(as.data.frame(m.FC), aes(x = NEO_LPS_vs_NEO_ctl, y = AD_LPS_vs_AD_ctl, color = summary)) +
+  geom_point(data = m.FC[m.FC$summary == "notDE", ], aes(x = NEO_LPS_vs_NEO_ctl, y = AD_LPS_vs_AD_ctl, color = summary), alpha = 0.5, shape = 16) +
+  geom_point(data = m.FC[!m.FC$summary == "notDE", ], aes(x = NEO_LPS_vs_NEO_ctl, y = AD_LPS_vs_AD_ctl, color = summary), alpha = 0.5, shape = 16)+
+  theme_linedraw() +
+  theme(legend.position = "none", panel.grid = element_blank()) +
+  ggtitle("FC-FC plot")+
+  geom_hline(yintercept = 0, color="black", linetype="dashed")+
+  geom_vline(xintercept = 0, color="black", linetype="dashed")+
+  geom_hline(yintercept = log2(2), color="darkgrey", linetype="dashed")+
+  geom_vline(xintercept = log2(2), color="darkgrey", linetype="dashed")+
+  geom_hline(yintercept = -log2(2), color="darkgrey", linetype="dashed")+
+  geom_vline(xintercept = -log2(2), color="darkgrey", linetype="dashed")+
+  geom_abline(slope = 1, color="black", linetype="dashed")+
+  geom_text_repel(data = m.FC[genes.to.label, ], aes(x = NEO_LPS_vs_NEO_ctl, y = AD_LPS_vs_AD_ctl, label = SYMBOL),
+                  size = 5, color = "black", force = 100)+
+  scale_color_manual(values=c("shared.up"="firebrick4",
+                              "comp1.up"="#FC6B9D",
+                              "comp2.up"="#323232",
+                              "shared.down"="dodgerblue3",
+                              "comp1.down"="#FC6B9D",
+                              "comp2.down"="#323232",
+                              "comp1.up_comp2.down"="#61A375",
+                              "comp1.down_comp2.up"="#61A375",
+                              "notDE"="grey"))
+
+ggsave("plots/FigS1B_FC-FC.pdf", height = 7, width = 7, dpi = 320)
+```
+
+
+#### UpSet plots
+```{r}
+## Up
+list <- list("NEO_ctl vs AD_ctl" = DE_results.df[DE_results.df$comparison == "NEO_ctl vs AD_ctl" & DE_results.df$regulation == "up", ]$SYMBOL,
+             "NEO_LPS vs NEO_ctl" = DE_results.df[DE_results.df$comparison == "NEO_LPS vs NEO_ctl" & DE_results.df$regulation == "up", ]$SYMBOL,
+             "AD_LPS vs AD_ctl" = DE_results.df[DE_results.df$comparison == "AD_LPS vs AD_ctl" & DE_results.df$regulation == "up", ]$SYMBOL, 
+             "NEO_LPS vs AD_LPS" = DE_results.df[DE_results.df$comparison == "NEO_LPS vs AD_LPS" & DE_results.df$regulation == "up", ]$SYMBOL)
+```
+
+```{r}
+cairo_pdf(filename = "plots/Fig_S1C_UpsetUp.pdf", width = 6, height = 4)
+upset(data = fromList(list), nsets = 4, keep.order = T, sets.bar.color = "firebrick") 
+dev.off()
+```
+
+```{r}
+## Down
+list <- list("NEO_ctl vs AD_ctl" = DE_results.df[DE_results.df$comparison == "NEO_ctl vs AD_ctl" & DE_results.df$regulation == "down", ]$SYMBOL,
+             "NEO_LPS vs NEO_ctl" = DE_results.df[DE_results.df$comparison == "NEO_LPS vs NEO_ctl" & DE_results.df$regulation == "down", ]$SYMBOL,
+             "AD_LPS vs AD_ctl" = DE_results.df[DE_results.df$comparison == "AD_LPS vs AD_ctl" & DE_results.df$regulation == "down", ]$SYMBOL, 
+             "NEO_LPS vs AD_LPS" = DE_results.df[DE_results.df$comparison == "NEO_LPS vs AD_LPS" & DE_results.df$regulation == "down", ]$SYMBOL)
+```
+
+```{r}
+cairo_pdf(filename = "plots/Fig_S1D_UpsetDown.pdf", width = 6, height = 4)
+upset(data = fromList(list), nsets = 4, keep.order = T, sets.bar.color = "dodgerblue3")
+dev.off()
+```
+```{r}
+save.image("environment/DESeq2_Image.RData")
+```
+
+
+# ---
+
+
+## hCoCena
+
+
+```{r}
+load("environment/DESeq2_Image.RData")
+```
+
+```{r}
+library(hcocena)
+
+## updated functions
+source(file = "hCoCena_objects/hCoCena_functions_updated.R")
+```
+
+
+### 1. Create hCoCena object
+
+```{r}
+init_object()
+```
+
+
+### 2. Set-up & import
+
+```{r}
+project_dir <- "~/data/analysis/Lisa/analysis_LPS/2023-09-04_CellMetabolsim/"
+
+init_wd(dir_count_data = project_dir,
+        dir_annotation = project_dir,
+        dir_reference_files = paste0(project_dir, "references/"),
+        dir_output = paste0(project_dir, "plots/"))
+
+init_save_folder(name = "hCoCena_Output")
+```
+
+    
+```{r}
+## Defining layers
+counts <- removedbatch_dds_vst
+counts$GENEID <- rownames(counts)
+counts <- merge(counts, tx_annotation, by="GENEID")
+rownames(counts) <- counts$SYMBOL
+counts <- counts[, colnames(counts) %in% sample_table$ID]
+
+define_layers(list(RNA_Seq = c("counts", "sample_table")))
+
+set_supp_files(Tf = "TFcat.txt", 
+               Hall = "h.all.v2023.1.Hs.symbols.gmt", 
+               Go = "c5.go.bp.v2023.1.Hs.symbols.gmt",
+               Kegg = "c2.cp.kegg.v2023.1.Hs.symbols.gmt")
+
+## Define global settings
+set_global_settings(organism = "human", 
+    								control_keyword = "none", 
+    								variable_of_interest = "condition", 
+    								min_nodes_number_for_network = 40, 
+    								min_nodes_number_for_cluster = 40,
+    								range_GFC = 2.0,
+    								layout_algorithm = "cytoscape",
+    								data_in_log = T)
+
+## Data import
+read_data()
+read_supplementary()
+hcobject$data$set1_anno$condition <- paste0(hcobject$data$set1_anno$group, "_", hcobject$data$set1_anno$treatment)
+```
+
+
+### 3. Determine variable genes
+
+```{r suggest top most variant genes}
+hcocena::suggest_topvar()
+```
+  
+```{r layer-specific settings}
+## Define layer-specific settings
+set_layer_settings(top_var = c(8535), 
+                   min_corr = rep(0.9, length(hcobject[["layers"]])), 
+                   range_cutoff_length = rep(100, length(hcobject[["layers"]])),
+                   print_distribution_plots = rep(F, length(hcobject[["layers"]])))
+```
+
+
+### 4. Data processing & correlation cutoff selection
+
+```{r expression analysis up to cutoff}
+run_expression_analysis_1()
+```
+
+```{r fig.height = 8, fig.width = 15}
+plot_cutoffs(interactive = T)
+```
+ 
+```{r choose cutoff}
+set_cutoff(cutoff_vector = c(0.963))
+```
+
+```{r}
+run_expression_analysis_2(plot_HM = F)
+```
+
+```{r}
+build_integrated_network(mode = "u", multi_edges = "min")
+```
+
+
+### 5. Module detection  
+
+```{r compute clusters and plot module heatmap}
+cluster_calculation(no_of_iterations = 10)
+plot_cluster_heatmap(col_order = c("NEO_ctl", "AD_ctl", "NEO_LPS", "AD_LPS"), 
+                     cluster_columns = F, 
+                     file_name = "Fig_1C_ModuleHeatmap.pdf")
+```
+
+### 6. Functional enrichment
+
+```{r GO profiling, fig.width = 10, fig.height = 10, message = F, warning = F}
+go_profiling(level = 6, top = 5, ont = "BP")
+
+enrich_modules(gene_sets = c("Hallmark", "Kegg"), 
+               top = 5, 
+               padj = "bonferroni")
+```
+
+
+
+### 7. Network visualization
+
+Colored by module
+```{r plot network coloured by cluster, fig.width=10, fig.height=7}
+# the layout was calculated using Cytoscape organic layout
+layout_matrix <- read.csv(file = "hCoCena_objects/graph_positionInfo_organic.csv", header = T, stringsAsFactors = F, row.names = 1)
+hcobject[["integrated_output"]][["cluster_calc"]][["layout"]] <- as.matrix(layout_matrix)
+plot_integrated_network(layout = hcobject[["integrated_output"]][["cluster_calc"]][["layout"]], save = T) 
+```
+
+Colored by GFC for each of the conditions
+```{r}
+plot_GFC_network()
+```
+
+# ---
+
+# Save
+
+```{r}
+gtc <- GeneToCluster()
+```
+
+
+```{r}
+saveRDS(hcobject, "hCoCena_objects/hcobject.rds")
+saveRDS(gtc, "hCoCena_objects/gtc.rds")
+saveRDS(counts, "hCoCena_objects/counts_batchcorr_log.rds")
+```
+

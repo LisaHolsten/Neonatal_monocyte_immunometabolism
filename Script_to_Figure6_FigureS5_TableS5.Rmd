@@ -1,0 +1,639 @@
+---
+title: "Figure 6 & Figure S5 & Table S5"
+author: "Lisa Holsten"
+date: '2023-09-04'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Packages
+
+```{r}
+BiocManager::install("ggnetwork", update = FALSE)
+library(ggnetwork)
+```
+
+```{r}
+library(DESeq2)
+library(sva)
+library(limma)
+library(ggplot2)
+library(ggrepel)
+library(tidyverse)
+library(UpSetR)
+library(dplyr)
+library(tidyr)
+
+library(ggpubr)
+library(pheatmap)
+library(ComplexHeatmap)
+library(circlize)
+library(RcisTarget)
+library(stringr)
+library(rstatix)
+```
+
+
+## Color scheme
+
+```{r}
+cols_module <- c("gold", "lightgreen", "maroon", "plum", "seagreen", "steelblue", "turquoise", "wheat" )
+names(cols_module) <- cols_module
+
+col_group <- c("#FC6B9D", "#323232")
+names(col_group) <- c("NEO", "AD")
+
+col_treatment <- c("#d4d6d8", "#82898e")
+names(col_treatment) <- c("ctl", "LPS")
+```
+
+
+## Import
+```{r}
+sample_table <- read.table(file = "tables/sample_table.txt", 
+                           sep = ";", 
+                           stringsAsFactors = F)
+sample_table$condition <- factor(sample_table$condition, levels = c("NEO_ctl", "AD_ctl", "NEO_LPS", "AD_LPS"))
+```
+
+```{r}
+counts_bc <- readRDS("hCoCena_objects/counts_batchcorr_log.rds")
+hcobject <- readRDS("hCoCena_objects/hcobject.rds")
+gtc <- readRDS("hCoCena_objects/gtc.rds")
+DE_results.df <- read.csv("tables/DEGs.csv",  sep = "\t", dec = ",")
+```
+
+
+# ---
+
+
+# 1. Identifiy modules of interest based on differences in mean expression between groups at baseline
+
+```{r}
+# Calculate mean expression per sample and module & filter for control condition
+mean.module <- counts_bc %>% mutate("gene" = rownames(counts_bc)) %>% left_join(gtc) %>% 
+  tidyr::pivot_longer(cols = 1:12, names_to = "sample", values_to = "expression") %>% na.omit() %>% 
+  group_by(color, sample) %>% summarize(mean_sample = mean(expression)) %>%
+  left_join(sample_table, by = c("sample" = "ID")) 
+
+## Calculate statistics
+stats.df <- compare_means(formula = mean_sample ~ condition, 
+                          data = mean.module, 
+                          method = "t.test", 
+                          paired = F,  
+                          group.by = "color",
+                          p.adjust.method = "bonferroni") 
+stats.df$comparison <- paste0(stats.df$group1, "_", stats.df$group2)
+
+
+stats.baseline <- stats.df[stats.df$comparison == "NEO_ctl_AD_ctl", ]
+stats.baseline$p.adj <- round(p.adjust(p = stats.baseline$p, method = "bonferroni"), digits = 4)
+```
+
+
+### Heatmap (Fig 6A)
+
+```{r}
+# Matrix with mean expression per sample & gene name in last name ("Gene)
+counts_scaled <- counts_bc[, colnames(counts_bc) %in% sample_table[sample_table$treatment == "ctl", ]$ID]
+
+if (identical(colnames(counts_scaled), sample_table$ID[1:6])){
+  colnames(counts_scaled) <- sample_table$donor[1:6]
+} else {print("Reorder")}
+
+counts_scaled <- t(scale(t(counts_scaled))) %>% as.data.frame() %>% mutate("Gene" = rownames(counts_scaled))
+```
+
+```{r, fig.height=5, fig.width=8}
+source("hCoCena_objects/plot_cluster_heatmap_mean.R")
+
+hcobject$global_settings$voi <- "donor"
+plot_cluster_heatmap_mean(matrix_groupmean = counts_scaled,
+                          stats = stats.baseline,
+                          col_order = colnames(counts_scaled)[1:6],
+                          row_order = c("maroon", "gold", "steelblue", "plum", "turquoise", "wheat", "seagreen", "lightgreen"), 
+                          cluster_columns = F,
+                          cluster_rows = F ,
+                          file_name = "Fig_6A_ModuleHeatmap.pdf", 
+                          return_HM = T)
+```
+
+
+### Boxplot (Fig S5A)
+
+```{r, fig.height=6, fig.width=8}
+mean.module$condition <- factor(mean.module$condition, levels = c("NEO_ctl", "AD_ctl", "NEO_LPS", "AD_LPS"))
+mean.module$color <- factor(mean.module$color, levels = c("maroon", "gold", "steelblue", "plum", "turquoise", "wheat", "seagreen", "lightgreen"))
+
+stats <- stats.df[stats.df$comparison %in% c("NEO_ctl_AD_ctl", "NEO_LPS_AD_LPS"), ]
+stats$p.adj <- round(p.adjust(p = stats$p, method = "bonferroni"), digits = 4)
+
+stat.test <- stats %>%
+  mutate(y.position = 9) %>% 
+  dplyr::select(-.y.) %>%
+  mutate(p.adj.signif = symnum(p.adj, corr = FALSE, na = FALSE, 
+                               cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), 
+                               symbols = c("****", "***", "**", "*", "ns")))
+stat.test$color <- factor(stat.test$color, levels = c("maroon", "gold", "steelblue", "plum", "turquoise", "wheat", "seagreen", "lightgreen"))
+
+ggplot(mean.module, aes(x=condition, y=mean_sample)) + 
+  geom_boxplot(alpha = 0.5) +
+  facet_wrap(~color, ncol = 4) + 
+  ylim(c(0, 11)) + 
+  stat_pvalue_manual(data = stat.test, label = "p.adj.signif") + 
+  geom_jitter(size=1) +
+  facet_wrap(~color, ncol = 4) +
+  ylim(c(0, 11)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1)) +
+  xlab("") + ylab("mean expression") 
+
+ggsave(filename = "plots/Fig_S5A_MeanBoxplot.pdf", device = cairo_pdf, dpi = "print", height = 4, width = 6)
+```
+
+
+# ---
+
+
+# 2. Transcription factor-binding site prediction analysis using on RCisTarget
+
+Based on genes within modules of interest as determined in A
+```{r}
+# gene lists
+genes_maroon     <- gtc[gtc$color == "maroon", ]$gene
+genes_lightgreen <- gtc[gtc$color == "lightgreen", ]$gene
+genes_steelblue  <- gtc[gtc$color == "steelblue", ]$gene
+
+input_list <- list("module_maroon"     = genes_maroon,
+                   "module_lightgreen" = genes_lightgreen,
+                   "module_steelblue"  = genes_steelblue)
+
+# Search space: 10k bp around TSS - HUMAN
+motifRankings <- importRankings("~/downstream_references/downstream_references/rcistarget/hg38__refseq-r80__10kb_up_and_down_tss.mc9nr_.feather")
+
+# Load the annotation to human transcription factors
+data(motifAnnotations_hgnc)
+
+# Calculate enrichment
+motifEnrichmentTable <- cisTarget(input_list,
+                                  motifRankings,
+                                  motifAnnot=motifAnnotations_hgnc)
+
+# Transform
+annotatedTfs <- lapply(split(motifEnrichmentTable$TF_highConf, motifEnrichmentTable$geneSet), function(x) {
+  genes <- gsub(" \\(.*\\). ", "; ", x, fixed=FALSE)
+  genesSplit <- unique(unlist(strsplit(genes, "; ")))
+  return(genesSplit)
+  })
+```
+
+
+### Heatmap of candidate regulators (Fig 6B)
+
+```{r}
+candidate_regulators <- annotatedTfs$module_steelblue[annotatedTfs$module_steelblue %in% 
+                                                        c(annotatedTfs$module_lightgreen, annotatedTfs$module_maroon)]
+
+DEGs_baseline <- DE_results.df[DE_results.df$comparison == "NEO_ctl vs AD_ctl", ]
+
+matrix <- counts_bc[rownames(counts_bc) %in% candidate_regulators, colnames(counts_bc) %in% sample_table[sample_table$treatment == "ctl", ]$ID] 
+if(identical(colnames(matrix), sample_table[sample_table$treatment == "ctl", ]$ID)){
+  colnames(matrix) <- sample_table[sample_table$treatment == "ctl", ]$donor
+} else {print("Re-order")}
+```
+
+```{r}
+# Row annotation
+anno_row_df <- data.frame(gene = rownames(matrix)) %>% 
+  left_join(DEGs_baseline[, c("SYMBOL", "regulation")], by = c("gene" = "SYMBOL")) %>%
+  left_join(gtc) %>%
+  column_to_rownames("gene")
+colnames(anno_row_df) <- c("DE_NEOctl_vs_ADctl", "CoCena_module")
+
+anno_row_df$TFBS_maroon     <- ifelse(rownames(anno_row_df) %in% annotatedTfs$module_maroon, "yes", "no")
+anno_row_df$TFBS_lightgreen <- ifelse(rownames(anno_row_df) %in% annotatedTfs$module_lightgreen, "yes", "no")
+anno_row_df$TFBS_steelblue  <- ifelse(rownames(anno_row_df) %in% annotatedTfs$module_steelblue, "yes", "no")
+
+anno_row_df$CoCena_module <- factor(anno_row_df$CoCena_module, 
+                                    levels = c("maroon", "gold", "steelblue", "plum", "turquoise", "wheat", "seagreen", "lightgreen"))
+
+# Column annotation
+anno_col_df <- sample_table[sample_table$donor %in% colnames(matrix), ]  %>% 
+  dplyr::select(donor, group) %>% unique() %>% remove_rownames()  %>% column_to_rownames("donor")
+
+
+# Colors
+cols_DEA <- c("dodgerblue3", "firebrick4", "lightgrey")
+names(cols_DEA) <- c("down", "up", "n.s.")
+
+cols_module <- unique(gtc$color)
+names(cols_module) <- unique(gtc$color)
+
+cols_TFBS_m <- c("maroon", "lightgrey")
+names(cols_TFBS_m) <- c("yes", "no")
+
+cols_TFBS_l <- c("lightgreen", "lightgrey")
+names(cols_TFBS_l) <- c("yes", "no")
+
+cols_TFBS_s <- c("steelblue", "lightgrey")
+names(cols_TFBS_s) <- c("yes", "no")
+
+anno_colors <- list(group = col_group,
+                    CoCena_module = cols_module, 
+                    DE_NEOctl_vs_ADctl = cols_DEA,
+                    TFBS_maroon = cols_TFBS_m,
+                    TFBS_lightgreen = cols_TFBS_l, 
+                    TFBS_steelblue = cols_TFBS_s)
+```
+
+```{r, fig.height=15, fig.width=7}
+pheatmap::pheatmap(mat = matrix, 
+         cluster_rows = T, 
+         cluster_cols = F,
+         scale = "row", 
+         cutree_rows = 2,
+         annotation_col = anno_col_df,
+         annotation_colors = anno_colors,
+         annotation_row = anno_row_df, 
+         na_col = "lightgrey",
+         cellwidth = 15, 
+         cellheight = 15, 
+         treeheight_row = 10, 
+         drop_levels = T,
+         main = "Candidate regulators", 
+         filename = "plots/Fig_6B_Heatmap_candidate_regulators.pdf", 
+         width = 6, height = 7)
+```
+
+
+### Heatmap of E2F1 target genes (Fig S5B)
+
+```{r}
+# Get all potential E2F1 target genes
+E2F1_df <- motifEnrichmentTable[str_detect(string = motifEnrichmentTable$TF_highConf, pattern = "E2F1", negate = F), ]
+
+E2F1_targets <- lapply(split(x = E2F1_df$enrichedGenes, f = E2F1_df$geneSet), function(x) {
+  genes <- gsub(" \\(.*\\). ", "; ", x, fixed=FALSE)
+  genesSplit <- unique(unlist(strsplit(genes, ";")))
+  return(genesSplit)
+  }) %>% unlist() %>% unique()
+
+# Calculate mean expression per condition
+mean.group <- counts_bc %>% mutate("gene" = rownames(counts_bc)) %>% 
+  pivot_longer(cols = 1:12, names_to = "sample", values_to = "expression") %>% 
+  left_join(sample_table[, c("ID", "condition")], by = c("sample" = "ID")) %>% 
+  group_by(gene, condition) %>% summarize(mean_group = mean(expression)) %>%
+  pivot_wider(id_cols = "gene", names_from = "condition", values_from = mean_group) %>%
+  column_to_rownames("gene")
+
+# Matrix
+matrix <- mean.group[rownames(mean.group) %in% E2F1_targets, ]
+matrix <- matrix[, c("NEO_ctl", "AD_ctl", "NEO_LPS", "AD_LPS")]
+```
+
+```{r}
+# Column annotation
+anno_col_df <- sample_table[sample_table$condition %in% colnames(matrix), ]  %>% dplyr::select(condition, group, treatment) %>% unique() %>%
+  remove_rownames() %>%  column_to_rownames("condition")
+
+# Row annotation
+DEGenes_wide <- DE_results.df %>% pivot_wider(id_cols = "SYMBOL", names_from = "comparison", values_from = "regulation")
+
+anno_row_df <- data.frame(gene = rownames(matrix)) %>% 
+  left_join(DEGenes_wide, by = c("gene" = "SYMBOL")) %>%
+  left_join(gtc) %>%
+  column_to_rownames("gene")
+colnames(anno_row_df) <- c("NEO_ctlvsAD_ctl", "NEO_LPSvsAD_LPS", "NEO_LPS_vs_NEO_ctl", "AD_LPSvsAD_ctl", "CoCena_module")
+
+# Colors
+anno_colors <- list(group              = col_group,
+                    treatment          = col_treatment,
+                    CoCena_module      = cols_module[names(cols_module) %in% c("maroon", "steelblue", "lightgreen")], 
+                    NEO_ctlvsAD_ctl    = cols_DEA,
+                    NEO_LPSvsAD_LPS    = cols_DEA,
+                    NEO_LPS_vs_NEO_ctl = cols_DEA, 
+                    AD_LPSvsAD_ctl     = cols_DEA)
+```
+
+
+```{r, fig.height=13, fig.width=5}
+pheatmap::pheatmap(mat = matrix, 
+         cluster_rows = T, 
+         cluster_cols = F,
+         scale = "row", 
+         show_rownames = F,
+         annotation_col = anno_col_df,
+         annotation_colors = anno_colors,
+         annotation_row = anno_row_df, 
+         cellwidth = 15, 
+         treeheight_row = 10,
+         main = "E2F1 target genes", 
+         filename = "plots/Fig_S5B_Heatmap_E2F1_targets.pdf",
+         width = 6, height = 8)
+```
+
+
+### Network visualization of potential regulators and their targets
+
+#### All (Fig 6D)
+Network of all candidate regulators and their target TFs predicted to also regulate the modules of interest
+```{r}
+graph_df <- data.frame()
+
+TFs_of_interest <- candidate_regulators
+all_TFs <- c(annotatedTfs$module_lightgreen, annotatedTfs$module_maroon, annotatedTfs$module_steelblue)
+
+# Get all target TFs of candidate regulators
+for (i in 1:length(TFs_of_interest)){
+  TF <- TFs_of_interest[i]
+  tmp <- motifEnrichmentTable[str_detect(string = motifEnrichmentTable$TF_highConf, pattern = TF, negate = F), ]
+  targets <- lapply(split(x = tmp$enrichedGenes, f = tmp$geneSet), function(x) {
+    genes <- gsub(" \\(.*\\). ", "; ", x, fixed=FALSE)
+    genesSplit <- unique(unlist(strsplit(genes, ";")))
+    return(genesSplit)
+    })
+  target_genes <- targets %>% unlist() %>% unique()
+  df <- data.frame("from" = rep(TF, length(target_genes)), "to" = target_genes)
+  df <- df[!df$to == TF & df$to %in% all_TFs, ]
+  
+  graph_df <- rbind(graph_df, df)
+}
+
+# Generate network object
+n <- network::network(graph_df, directed = T)
+```
+
+```{r, fig.height=7, fig.width=10}
+n_targets <- graph_df %>% group_by(from) %>% summarize(n_targets = n())
+n_regulators <- graph_df %>% group_by(to) %>% summarize(n_regulators = n())
+
+set.seed(75)
+
+df <- ggnetwork(n,  layout = "fruchtermanreingold", arrow.gap = 0.025) %>% 
+  left_join(gtc, by = c("vertex.names" = "gene")) %>% 
+  left_join(n_targets, by = c("vertex.names" = "from")) %>%
+  left_join(n_regulators, by = c("vertex.names" = "to")) %>% 
+  rowwise() %>% mutate(n_connections = sum(n_targets, n_regulators, na.rm = T))
+
+# Include DE information
+df <- left_join(df, DE_results.df[DE_results.df$comparison == "NEO_ctl vs AD_ctl", c("SYMBOL", "regulation")], by = c("vertex.names" = "SYMBOL"))
+
+df$color <- ifelse(is.na(df$color), "not incl.", df$color)
+
+cols_module_ext <-  c(unique(gtc$color), "grey")
+names(cols_module_ext) <- c(unique(gtc$color), "not incl.")
+```
+
+
+
+```{r, fig.height=8, fig.width=12}
+ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
+  
+  # Edges
+  geom_edges(arrow = arrow(length = unit(6, "pt"), type = "open", angle=20), color = "grey50", size = 0.2) +
+  
+  # Nodes - DEA
+  geom_nodes(aes(x, y, color = regulation, size = n_connections*1.5), shape = 21, stroke = 2, show.legend = T, fill = NA) + 
+  scale_color_manual(values = cols_DEA) +
+  ggnewscale::new_scale_color() + 
+  
+  # Nodes
+  geom_nodes(aes(x, y, fill = color, size = n_connections), shape = 21, stroke = 1, color = "white") +
+  scale_fill_manual(values = scales::alpha(cols_module_ext, 0.7)) +
+
+  
+  scale_size_continuous(breaks = c(1, 10, 20, 30),
+                        labels = c("1", "10", "20","30"),
+                        range = c(5, 15)) +
+  
+  # Node text
+  geom_nodetext(aes(label = vertex.names), size = 5) +
+  
+  # General
+  theme_blank()+ 
+  ggtitle("")
+
+ggsave(filename = "plots/Fig_6D_Network_regulators.pdf", device = cairo_pdf, dpi = "print", height = 8, width = 12)
+```
+
+
+#### Individual TFs (Fig S5C)
+
+Network of E2F1 and its target TFs predicted to also regulate the modules of interest
+```{r}
+graph_df <- data.frame()
+
+TFs_of_interest <- "E2F1"
+all_TFs <- c(annotatedTfs$module_lightgreen, annotatedTfs$module_maroon, annotatedTfs$module_steelblue)
+
+# Get all target TFs of candidate regulators
+for (i in 1:length(TFs_of_interest)){
+  TF <- TFs_of_interest[i]
+  tmp <- motifEnrichmentTable[str_detect(string = motifEnrichmentTable$TF_highConf, pattern = TF, negate = F), ]
+  targets <- lapply(split(x = tmp$enrichedGenes, f = tmp$geneSet), function(x) {
+    genes <- gsub(" \\(.*\\). ", "; ", x, fixed=FALSE)
+    genesSplit <- unique(unlist(strsplit(genes, ";")))
+    return(genesSplit)
+    })
+  target_genes <- targets %>% unlist() %>% unique()
+  df <- data.frame("from" = rep(TF, length(target_genes)), "to" = target_genes)
+  df <- df[!df$to == TF & df$to %in% all_TFs, ]
+  
+  graph_df <- rbind(graph_df, df)
+}
+
+# Generate network object
+n <- network::network(graph_df, directed = T)
+```
+
+```{r, fig.height=7, fig.width=10}
+n_targets <- graph_df %>% group_by(from) %>% summarize(n_targets = n())
+n_regulators <- graph_df %>% group_by(to) %>% summarize(n_regulators = n())
+
+set.seed(10)
+df <- ggnetwork(n,  layout = "fruchtermanreingold", arrow.gap = 0.05) %>% 
+  left_join(gtc, by = c("vertex.names" = "gene"))
+```
+
+```{r, fig.height=5, fig.width=5}
+ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt"), type = "open", angle=20), color = "grey50", size = 0.2) +
+  geom_nodelabel(aes(label = vertex.names, fill = color), label.size = 0) +
+  scale_fill_manual(values = cols_module) +
+  theme_blank()+ 
+  theme(legend.position = "none") + 
+  ggtitle("")
+
+ggsave(filename = "plots/Fig_S5C_Network_E2F1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+```
+
+
+Network of MYB and its target TFs predicted to also regulate the modules of interest
+```{r}
+graph_df <- data.frame()
+
+TFs_of_interest <- "MYB"
+all_TFs <- c(annotatedTfs$module_lightgreen, annotatedTfs$module_maroon, annotatedTfs$module_steelblue)
+
+# Get all target TFs of candidate regulators
+for (i in 1:length(TFs_of_interest)){
+  TF <- TFs_of_interest[i]
+  tmp <- motifEnrichmentTable[str_detect(string = motifEnrichmentTable$TF_highConf, pattern = TF, negate = F), ]
+  targets <- lapply(split(x = tmp$enrichedGenes, f = tmp$geneSet), function(x) {
+    genes <- gsub(" \\(.*\\). ", "; ", x, fixed=FALSE)
+    genesSplit <- unique(unlist(strsplit(genes, ";")))
+    return(genesSplit)
+    })
+  target_genes <- targets %>% unlist() %>% unique()
+  df <- data.frame("from" = rep(TF, length(target_genes)), "to" = target_genes)
+  df <- df[!df$to == TF & df$to %in% all_TFs, ]
+  
+  graph_df <- rbind(graph_df, df)
+}
+
+# Generate network object
+n <- network::network(graph_df, directed = T)
+```
+
+```{r, fig.height=7, fig.width=10}
+n_targets <- graph_df %>% group_by(from) %>% summarize(n_targets = n())
+n_regulators <- graph_df %>% group_by(to) %>% summarize(n_regulators = n())
+
+set.seed(10)
+df <- ggnetwork(n,  layout = "fruchtermanreingold", arrow.gap = 0.05) %>% 
+  left_join(gtc, by = c("vertex.names" = "gene"))
+```
+
+```{r, fig.height=5, fig.width=5}
+ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt"), type = "open", angle=20), color = "grey50", size = 0.2) +
+  geom_nodelabel(aes(label = vertex.names, fill = color), label.size = 0) +
+  scale_fill_manual(values = cols_module) +
+  theme_blank()+ 
+  theme(legend.position = "none") + 
+  ggtitle("")
+
+ggsave(filename = "plots/Fig_S5D_Network_MYB.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+```
+
+
+Network of STAT1 and its target TFs predicted to also regulate the modules of interest
+```{r}
+graph_df <- data.frame()
+
+TFs_of_interest <- "STAT1"
+all_TFs <- c(annotatedTfs$module_lightgreen, annotatedTfs$module_maroon, annotatedTfs$module_steelblue)
+
+# Get all target TFs of candidate regulators
+for (i in 1:length(TFs_of_interest)){
+  TF <- TFs_of_interest[i]
+  tmp <- motifEnrichmentTable[str_detect(string = motifEnrichmentTable$TF_highConf, pattern = TF, negate = F), ]
+  targets <- lapply(split(x = tmp$enrichedGenes, f = tmp$geneSet), function(x) {
+    genes <- gsub(" \\(.*\\). ", "; ", x, fixed=FALSE)
+    genesSplit <- unique(unlist(strsplit(genes, ";")))
+    return(genesSplit)
+    })
+  target_genes <- targets %>% unlist() %>% unique()
+  df <- data.frame("from" = rep(TF, length(target_genes)), "to" = target_genes)
+  df <- df[!df$to == TF & df$to %in% all_TFs, ]
+  
+  graph_df <- rbind(graph_df, df)
+}
+
+# Generate network object
+n <- network::network(graph_df, directed = T)
+```
+
+```{r, fig.height=7, fig.width=10}
+n_targets <- graph_df %>% group_by(from) %>% summarize(n_targets = n())
+n_regulators <- graph_df %>% group_by(to) %>% summarize(n_regulators = n())
+
+set.seed(10)
+df <- ggnetwork(n,  layout = "fruchtermanreingold", arrow.gap = 0.05) %>% 
+  left_join(gtc, by = c("vertex.names" = "gene"))
+```
+
+```{r, fig.height=5, fig.width=5}
+ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt"), type = "open", angle=20), color = "grey50", size = 0.2) +
+  geom_nodelabel(aes(label = vertex.names, fill = color), label.size = 0) +
+  scale_fill_manual(values = cols_module) +
+  theme_blank()+ 
+  theme(legend.position = "none") + 
+  ggtitle("")
+
+ggsave(filename = "plots/Fig_S5D_Network_STAT1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+```
+
+
+Network of FLI1 and its target TFs predicted to also regulate the modules of interest
+```{r}
+graph_df <- data.frame()
+
+TFs_of_interest <- "FLI1"
+all_TFs <- c(annotatedTfs$module_lightgreen, annotatedTfs$module_maroon, annotatedTfs$module_steelblue)
+
+# Get all target TFs of candidate regulators
+for (i in 1:length(TFs_of_interest)){
+  TF <- TFs_of_interest[i]
+  tmp <- motifEnrichmentTable[str_detect(string = motifEnrichmentTable$TF_highConf, pattern = TF, negate = F), ]
+  targets <- lapply(split(x = tmp$enrichedGenes, f = tmp$geneSet), function(x) {
+    genes <- gsub(" \\(.*\\). ", "; ", x, fixed=FALSE)
+    genesSplit <- unique(unlist(strsplit(genes, ";")))
+    return(genesSplit)
+    })
+  target_genes <- targets %>% unlist() %>% unique()
+  df <- data.frame("from" = rep(TF, length(target_genes)), "to" = target_genes)
+  df <- df[!df$to == TF & df$to %in% all_TFs, ]
+  
+  graph_df <- rbind(graph_df, df)
+}
+
+# Generate network object
+n <- network::network(graph_df, directed = T)
+```
+
+```{r, fig.height=7, fig.width=10}
+n_targets <- graph_df %>% group_by(from) %>% summarize(n_targets = n())
+n_regulators <- graph_df %>% group_by(to) %>% summarize(n_regulators = n())
+
+set.seed(10)
+df <- ggnetwork(n,  layout = "fruchtermanreingold", arrow.gap = 0.05) %>% 
+  left_join(gtc, by = c("vertex.names" = "gene"))
+```
+
+```{r, fig.height=5, fig.width=5}
+ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_edges(arrow = arrow(length = unit(6, "pt"), type = "open", angle=20), color = "grey50", size = 0.2) +
+  geom_nodelabel(aes(label = vertex.names, fill = color), label.size = 0) +
+  scale_fill_manual(values = cols_module) +
+  theme_blank()+ 
+  theme(legend.position = "none") + 
+  ggtitle("")
+
+ggsave(filename = "plots/Fig_S5D_Network_FLI1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+```
+
+
+# ---
+
+
+#3. Hub genes (hCoCena docker image; Fig 6C)
+
+```{r}
+hcocena::find_hubs(top = 15,
+                   clusters = c("maroon", "steelblue", "lightgreen"),
+                   save = T,
+                   tree_layout = F,
+                   TF_only = "TF",
+                   Plot = T)
+```
+
+
+
+# ---
+

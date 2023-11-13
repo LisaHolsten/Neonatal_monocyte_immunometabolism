@@ -1,0 +1,376 @@
+---
+title: "Figure 7"
+author: "Lisa Holsten"
+date: 2023-09-04
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Packages
+```{r}
+library(huva)
+library(huva.db)
+library(useful)
+library(limma)
+library(fgsea)
+library(dplyr)
+library(ggrepel)
+library(pheatmap)
+library(Rmisc)
+library(ggplot2)
+library(reshape2)
+library(ggpubr)
+library(patchwork)
+```
+
+## Functions
+```{r}
+source("run_huva_experiment_reverse.R")
+
+source("plot_binned_gene_modified.R")
+
+scaleColors <- function(data = input_scale, # data to use
+                        maxvalue = NULL # value at which the color is fully red / blue
+                        ){
+  if(is.null(maxvalue)){
+    maxvalue <- floor(min(abs(min(data)), max(data)))
+  }
+  if(max(data) > abs(min(data))){
+    if(ceiling(max(data)) == maxvalue){
+      myBreaks <- c(floor(-max(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(max(data)))
+    } else{
+      myBreaks <- c(floor(-max(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(max(data)))
+    }
+    paletteLength <- length(myBreaks)
+    myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+  } else {
+    if(-floor(min(data)) == maxvalue){
+      myBreaks <- c(floor(min(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(min(data)))
+    } else{
+      myBreaks <- c(floor(min(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(abs(min(data))))
+    }
+    paletteLength <- length(myBreaks)
+    myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+  }
+ return(list(breaks = myBreaks, color = myColor))
+}
+```
+
+```{r}
+set.seed(42)
+```
+
+
+# ---
+
+# 1. E2F1
+
+### Expression of E2F1 in selected dataset
+
+```{r, fig.height=4, fig.width=5}
+gene_name <- "E2F1"
+gene_overview <- gene_exam(huva_dataset = huva.db, gene = gene_name)
+expr_exam <- get_expr_exam(huva_expression = gene_overview, study = "FG500", dataset = "FG500_whole_blood")
+
+ggplot(expr_exam, aes(x=expression)) +
+  geom_histogram(color="black", bins = 50, fill= "white") + 
+  theme_bw() +
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.1), linetype = "dashed") + 
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.9), linetype = "dashed") + 
+  annotate("rect", xmin=-Inf, xmax=quantile(expr_exam$expression, 0.1), ymin=0, ymax=Inf, alpha=0.2, fill="#005596") +  
+  annotate("rect", xmin=quantile(expr_exam$expression, 0.9), xmax=Inf, ymin=0, ymax=Inf, alpha=0.2, fill="#6b1414") + 
+  xlab("E2F1 vst expression") + ylab("Number of donors") 
+
+ggsave(filename = "plots/Fig_7B_huva_E2F1_histogram.pdf", device = pdf, dpi = "print", height = 3, width = 3)
+```
+
+
+### Binning by E2F1 expression into low and high group
+```{r}
+binned_dataset <- run_huva_experiment_rev(data = huva.db, 
+                                      gene = gene_name, 
+                                      quantiles = 0.1, 
+                                      gs_list = hallmarks_V7.2,
+                                      summ = T, 
+                                      datasets_list = NULL, 
+                                      adjust.method = "none")
+```
+
+```{r, fig.height=4, fig.width=9}
+plot_binned <- plot_binned_gene_mod(goi = c("E2F1"), huva_experiment = binned_dataset)
+p0 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("MYB"), huva_experiment = binned_dataset)
+p1 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("STAT1"), huva_experiment = binned_dataset)
+p2 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("FLI1"), huva_experiment = binned_dataset)
+p3 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+p0 + p1 + p2 + p3 + plot_layout(ncol = 4, guides = "collect")
+
+ggsave(filename = "plots/Fig_7C_E2F1_genes.pdf", device = pdf, dpi = "print", height = 4, width = 9)
+```
+
+
+### GSEA on ranked gene list
+
+```{r}
+gsea_huva <- get_gsea_huva(huva_exp = binned_dataset, study = "FG500", int_plot = F)
+```
+
+```{r, fig.height=3, fig.width=5}
+tmp <- gsea_huva$FG500_whole_blood[abs(gsea_huva$FG500_whole_blood$NES)>2, ] %>% arrange(NES)
+tmp$pathway <- stringr::str_remove_all(string = tmp$pathway, pattern = "HALLMARK_") %>% stringr::str_replace_all("_", " ")
+
+ggplot(tmp, aes(x=forcats::fct_reorder(pathway, NES), y=NES)) +
+  geom_bar(stat="identity") + 
+  coord_flip() + 
+  ylim(-3.5, 3.5) + 
+  geom_hline(yintercept = 0) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank()) + 
+  theme(legend.position = "none") + 
+  xlab("")
+ggsave("plots/Fig_7D_E2F1enrich.pdf", device = pdf, dpi = "print", height = 3, width = 5)
+```
+
+
+# ---
+
+# 2. STAT1
+
+### Expression of STAT1 in selected dataset
+
+```{r, fig.height=4, fig.width=5}
+gene_name <- "STAT1"
+gene_overview <- gene_exam(huva_dataset = huva.db, gene = gene_name)
+expr_exam <- get_expr_exam(huva_expression = gene_overview, study = "FG500", dataset = "FG500_whole_blood")
+
+ggplot(expr_exam, aes(x=expression)) +
+  geom_histogram(color="black", bins = 50, fill= "white") + 
+  theme_bw() +
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.1), linetype = "dashed") + 
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.9), linetype = "dashed") + 
+  annotate("rect", xmin=-Inf, xmax=quantile(expr_exam$expression, 0.1), ymin=0, ymax=Inf, alpha=0.2, fill="#005596") +  
+  annotate("rect", xmin=quantile(expr_exam$expression, 0.9), xmax=Inf, ymin=0, ymax=Inf, alpha=0.2, fill="#6b1414") + 
+  xlab("STAT1 vst expression") + ylab("Number of donors") 
+
+ggsave(filename = "plots/Fig_7H_STAT1_histogram.pdf", device = pdf, dpi = "print", height = 3, width = 3)
+```
+
+
+### Binning by STAT1 expression into low and high group
+
+```{r}
+source("run_huva_experiment_reverse.R")
+binned_dataset <- run_huva_experiment_rev(data = huva.db, 
+                                          gene = gene_name, 
+                                          quantiles = 0.1, 
+                                          gs_list = hallmarks_V7.2,
+                                          summ = T, 
+                                          datasets_list = NULL, 
+                                          adjust.method = "none")
+```
+
+```{r, fig.height=4, fig.width=9}
+plot_binned <- plot_binned_gene_mod(goi = c("E2F1"), huva_experiment = binned_dataset)
+p0 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("MYB"), huva_experiment = binned_dataset)
+p1 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("STAT1"), huva_experiment = binned_dataset)
+p2 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("FLI1"), huva_experiment = binned_dataset)
+p3 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+p0 + p1 + p2 + p3 + plot_layout(ncol = 4, guides = "collect")
+
+ggsave(filename = "plots/Fig_7I_STAT1_genes.pdf", device = pdf, dpi = "print", height = 4, width = 9)
+```
+
+### GSEA on ranked gene list
+
+```{r}
+gsea_huva <- get_gsea_huva(huva_exp = binned_dataset, study = "FG500", int_plot = F)
+```
+
+```{r, fig.height=3, fig.width=5}
+tmp <- gsea_huva$FG500_whole_blood[abs(gsea_huva$FG500_whole_blood$NES)>2, ] %>% arrange(NES)
+tmp$pathway <- stringr::str_remove_all(string = tmp$pathway, pattern = "HALLMARK_") %>% stringr::str_replace_all("_", " ")
+
+ggplot(tmp, aes(x=forcats::fct_reorder(pathway, NES), y=NES)) +
+  geom_bar(stat="identity") + 
+  coord_flip() + 
+  ylim(-3.5, 3.5) + 
+  geom_hline(yintercept = 0) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank()) + 
+  theme(legend.position = "none") + 
+  xlab("")
+ggsave("plots/Fig_7J_STAT1_enrich.pdf", device = pdf, dpi = "print", height = 3, width = 4)
+```
+
+
+# ---
+
+# 3. FLI1
+
+### Expression of FLI1 in selected dataset
+
+```{r, fig.height=4, fig.width=5}
+gene_name <- "FLI1"
+gene_overview <- gene_exam(huva_dataset = huva.db, gene = gene_name)
+expr_exam <- get_expr_exam(huva_expression = gene_overview, study = "FG500", dataset = "FG500_whole_blood")
+
+ggplot(expr_exam, aes(x=expression)) +
+  geom_histogram(color="black", bins = 50, fill= "white") + 
+  theme_bw() +
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.1), linetype = "dashed") + 
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.9), linetype = "dashed") + 
+  annotate("rect", xmin=-Inf, xmax=quantile(expr_exam$expression, 0.1), ymin=0, ymax=Inf, alpha=0.2, fill="#005596") +  
+  annotate("rect", xmin=quantile(expr_exam$expression, 0.9), xmax=Inf, ymin=0, ymax=Inf, alpha=0.2, fill="#6b1414") + 
+  xlab("FLI1 vst expression") + ylab("Number of donors") 
+
+ggsave(filename = "plots/Fig_7K_huva_FLI1_histogram.pdf", device = pdf, dpi = "print", height = 4, width = 5)
+```
+
+
+### Binning by FLI1 expression into low and high group
+
+```{r}
+binned_dataset <- run_huva_experiment_rev(data = huva.db, 
+                                      gene = gene_name, 
+                                      quantiles = 0.1, 
+                                      gs_list = hallmarks_V7.2,
+                                      summ = T, 
+                                      datasets_list = NULL, 
+                                      adjust.method = "none")
+```
+
+```{r, fig.height=4, fig.width=9}
+plot_binned <- plot_binned_gene_mod(goi = c("E2F1"), huva_experiment = binned_dataset)
+p0 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("MYB"), huva_experiment = binned_dataset)
+p1 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("STAT1"), huva_experiment = binned_dataset)
+p2 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("FLI1"), huva_experiment = binned_dataset)
+p3 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+p0 + p1 + p2 + p3 + plot_layout(ncol = 4, guides = "collect")
+
+ggsave(filename = "plots/Fig_7L_FLI1_genes.pdf", device = pdf, dpi = "print", height = 4, width = 9)
+```
+
+
+### GSEA on ranked gene list
+
+```{r}
+gsea_huva <- get_gsea_huva(huva_exp = binned_dataset, study = "FG500", int_plot = F)
+```
+
+```{r, fig.height=3, fig.width=5}
+tmp <- gsea_huva$FG500_whole_blood[abs(gsea_huva$FG500_whole_blood$NES)>2, ] %>% arrange(NES)
+tmp$pathway <- stringr::str_remove_all(string = tmp$pathway, pattern = "HALLMARK_") %>% stringr::str_replace_all("_", " ")
+
+ggplot(tmp, aes(x=forcats::fct_reorder(pathway, NES), y=NES)) +
+  geom_bar(stat="identity") + 
+  coord_flip() + 
+  ylim(-3.5, 3.5) + 
+  geom_hline(yintercept = 0) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank()) + 
+  theme(legend.position = "none") + 
+  xlab("")
+ggsave("plots/Fig_7M_FLI1_enrich.pdf", device = pdf, dpi = "print", height = 3, width = 5)
+```
+
+# ---
+
+# 4. MYB
+
+### Expression of MYB in selected dataset
+
+```{r, fig.height=4, fig.width=5}
+gene_name <- "MYB"
+gene_overview <- gene_exam(huva_dataset = huva.db, gene = gene_name)
+expr_exam <- get_expr_exam(huva_expression = gene_overview, study = "FG500", dataset = "FG500_whole_blood")
+
+ggplot(expr_exam, aes(x=expression)) +
+  geom_histogram(color="black", bins = 50, fill= "white") + 
+  theme_bw() +
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.1), linetype = "dashed") + 
+  geom_vline(xintercept =quantile(expr_exam$expression, 0.9), linetype = "dashed") + 
+  annotate("rect", xmin=-Inf, xmax=quantile(expr_exam$expression, 0.1), ymin=0, ymax=Inf, alpha=0.2, fill="#005596") +  
+  annotate("rect", xmin=quantile(expr_exam$expression, 0.9), xmax=Inf, ymin=0, ymax=Inf, alpha=0.2, fill="#6b1414") + 
+  xlab("MYB vst expression") + ylab("Number of donors") 
+
+ggsave(filename = "plots/Fig_7E_huva_MYB_histogram.pdf", device = pdf, dpi = "print", height = 3, width = 3)
+```
+
+
+### Binning by MYB expression into low and high group
+
+```{r}
+source("run_huva_experiment_reverse.R")
+binned_dataset <- run_huva_experiment_rev(data = huva.db, 
+                                          gene = gene_name, 
+                                          quantiles = 0.1, 
+                                          gs_list = hallmarks_V7.2,
+                                          summ = T, 
+                                          datasets_list = NULL, 
+                                          adjust.method = "none")
+```
+
+```{r, fig.height=4, fig.width=9}
+plot_binned <- plot_binned_gene_mod(goi = c("E2F1"), huva_experiment = binned_dataset)
+p0 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("MYB"), huva_experiment = binned_dataset)
+p1 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("STAT1"), huva_experiment = binned_dataset)
+p2 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+plot_binned <- plot_binned_gene_mod(goi = c("FLI1"), huva_experiment = binned_dataset)
+p3 <- plot_binned$FG500_whole_blood + ylim(c(0, 15)) + ggtitle("")
+
+p0 + p1 + p2 + p3 + plot_layout(ncol = 4, guides = "collect")
+
+ggsave(filename = "plots/Fig_7F_MYB_genes.pdf", device = pdf, dpi = "print", height = 4, width = 9)
+```
+
+
+### GSEA on ranked gene list
+
+```{r}
+gsea_huva <- get_gsea_huva(huva_exp = binned_dataset, study = "FG500", int_plot = F)
+```
+
+```{r, fig.height=3, fig.width=5}
+tmp <- gsea_huva$FG500_whole_blood[abs(gsea_huva$FG500_whole_blood$NES)>2, ] %>% arrange(NES)
+tmp$pathway <- stringr::str_remove_all(string = tmp$pathway, pattern = "HALLMARK_") %>% stringr::str_replace_all("_", " ")
+
+ggplot(tmp, aes(x=forcats::fct_reorder(pathway, NES), y=NES)) +
+  geom_bar(stat="identity") + 
+  coord_flip() + 
+  ylim(-3.5, 3.5) + 
+  geom_hline(yintercept = 0) + 
+  theme_bw() + 
+  theme(panel.grid = element_blank()) + 
+  theme(legend.position = "none") + 
+  xlab("")
+ggsave("plots/Fig_7G_MYB_enrich.pdf", device = pdf, dpi = "print", height = 3, width = 5)
+```
