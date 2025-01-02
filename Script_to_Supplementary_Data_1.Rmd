@@ -1,5 +1,5 @@
 ---
-title: "Table S3"
+title: "Supplementary Data 1"
 author: "Lisa Holsten"
 date: '2023-09-04'
 output: html_document
@@ -58,5 +58,5 @@ functional_enrichment_results <- rbind(GO, KEGG, HM)
 list_of_datasets <- list("DESeq2 - DEA results" = DE_results.df, 
                          "hCoCena - Functional enrichment" = functional_enrichment_results,
                          "hCoCena - TFBS enrichemnt" = motifEnrichmentTable)
-write.xlsx(list_of_datasets, file = "tables/Table_S3.xlsx")
+write.xlsx(list_of_datasets, file = "tables/Supplementary_Data_1.xlsx")
 ```
