@@ -1,5 +1,5 @@
 ---
-title: "Figure 6 & Figure S5 & Table S5"
+title: "Figure 6 & Figure S7"
 author: "Lisa Holsten"
 date: '2023-09-04'
 output: html_document
@@ -123,7 +123,7 @@ plot_cluster_heatmap_mean(matrix_groupmean = counts_scaled,
 ```
 
 
-### Boxplot (Fig S5A)
+### Boxplot (Fig S7A)
 
 ```{r, fig.height=6, fig.width=8}
 mean.module$condition <- factor(mean.module$condition, levels = c("NEO_ctl", "AD_ctl", "NEO_LPS", "AD_LPS"))
@@ -152,7 +152,7 @@ ggplot(mean.module, aes(x=condition, y=mean_sample)) +
   theme(axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1)) +
   xlab("") + ylab("mean expression") 
 
-ggsave(filename = "plots/Fig_S5A_MeanBoxplot.pdf", device = cairo_pdf, dpi = "print", height = 4, width = 6)
+ggsave(filename = "plots/Fig_S7A_MeanBoxplot.pdf", device = cairo_pdf, dpi = "print", height = 4, width = 6)
 ```
 
 
@@ -270,7 +270,7 @@ pheatmap::pheatmap(mat = matrix,
 ```
 
 
-### Heatmap of E2F1 target genes (Fig S5B)
+### Heatmap of E2F1 target genes (Fig S7B)
 
 ```{r}
 # Get all potential E2F1 target genes
@@ -332,7 +332,7 @@ pheatmap::pheatmap(mat = matrix,
          cellwidth = 15, 
          treeheight_row = 10,
          main = "E2F1 target genes", 
-         filename = "plots/Fig_S5B_Heatmap_E2F1_targets.pdf",
+         filename = "plots/Fig_S7B_Heatmap_E2F1_targets.pdf",
          width = 6, height = 8)
 ```
 
@@ -421,7 +421,7 @@ ggsave(filename = "plots/Fig_6D_Network_regulators.pdf", device = cairo_pdf, dpi
 ```
 
 
-#### Individual TFs (Fig S5C)
+#### Individual TFs (Fig S7C)
 
 Network of E2F1 and its target TFs predicted to also regulate the modules of interest
 ```{r}
@@ -468,7 +468,7 @@ ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
   theme(legend.position = "none") + 
   ggtitle("")
 
-ggsave(filename = "plots/Fig_S5C_Network_E2F1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+ggsave(filename = "plots/Fig_S7C_Network_E2F1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
 ```
 
 
@@ -517,7 +517,7 @@ ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
   theme(legend.position = "none") + 
   ggtitle("")
 
-ggsave(filename = "plots/Fig_S5D_Network_MYB.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+ggsave(filename = "plots/Fig_S7C_Network_MYB.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
 ```
 
 
@@ -566,7 +566,7 @@ ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
   theme(legend.position = "none") + 
   ggtitle("")
 
-ggsave(filename = "plots/Fig_S5D_Network_STAT1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+ggsave(filename = "plots/Fig_S7C_Network_STAT1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
 ```
 
 
@@ -615,7 +615,7 @@ ggplot(df, aes(x = x, y = y, xend = xend, yend = yend)) +
   theme(legend.position = "none") + 
   ggtitle("")
 
-ggsave(filename = "plots/Fig_S5D_Network_FLI1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
+ggsave(filename = "plots/Fig_S7C_Network_FLI1.pdf", device = cairo_pdf, dpi = "print", height = 5, width = 5)
 ```
 
 
